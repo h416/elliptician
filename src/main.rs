@@ -96,8 +96,46 @@ fn draw_line(
 
     p.clear_mask();
 }
-
+fn diff(w: u32, h: u32, img: &[u8], img2: &[Rgba8]) -> i64 {
+    let mut sum = 0;
+    for y in 0..h {
+        for x in 0..w {
+            let index2 = (x + w * y) as usize;
+            let index = 4 * index2;
+            let r1 = img[index] as i64;
+            let g1 = img[index + 1] as i64;
+            let b1 = img[index + 2] as i64;
+            let a1 = img[index + 3] as i64;
+            let color2 = &img2[index2];
+            let r2 = color2.red() as i64;
+            let g2 = color2.green() as i64;
+            let b2 = color2.blue() as i64;
+            let a2 = color2.alpha() as i64;
+            /*
+            if y < 2 {
+                println!("{} {} {} {}", r1, g1, b1, a1);
+                println!(" {} {} {} {}", r2, g2, b2, a2);
+            }
+            */
+            let dr = r1 - r2;
+            let dg = g1 - g2;
+            let db = b1 - b2;
+            let a = a1 * a2;
+            let val = (dr * dr + dg * dg + db * db) * a;
+            sum += val;
+        }
+    }
+    sum
+}
 fn main() -> Result<(), Box<std::error::Error>> {
+    let img = image::open("examples/monalisa.jpg").unwrap().to_rgba();
+
+    println!("dimensions {:?}", img.dimensions());
+    let w = img.width();
+    let h = img.height();
+
+    let img_raw = img.into_raw();
+
     /*let rect = PathBuilder::new()
     .absolute()
     .move_to(10.0, 10.0)
@@ -118,7 +156,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
     /*
 
     */
-    let mut p = Plotter::new(320, 240);
+    let mut p = Plotter::new(w, h);
     let mut r: Raster<Rgba8> = Raster::new(p.width(), p.height());
     //r.over(p.fill(&rect, FillRule::NonZero), Rgba8::new(0, 0, 255, 255));
     /*
@@ -220,6 +258,11 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let mask_pixels = mask.pixels();
     over_fallback(pixels, mask_pixels, color);
     */
+
+    //let rastered_img = r.as_u8_slice();
+
+    let score = diff(w, h, &img_raw, pixels);
+    println!("score:{}", score);
 
     r.write_png("result.png")?;
 
