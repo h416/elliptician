@@ -127,6 +127,31 @@ fn diff(w: u32, h: u32, img: &[u8], img2: &[Rgba8]) -> i64 {
     }
     sum
 }
+
+fn avg_color(w: u32, h: u32, img: &[u8]) -> Rgba8 {
+    let mut sum_r = 0;
+    let mut sum_g = 0;
+    let mut sum_b = 0;
+    for y in 0..h {
+        for x in 0..w {
+            let index2 = (x + w * y) as usize;
+            let index = 4 * index2;
+            let r = img[index] as u32;
+            let g = img[index + 1] as u32;
+            let b = img[index + 2] as u32;
+
+            sum_r += r;
+            sum_g += g;
+            sum_b += b;
+        }
+    }
+    let count = (w * h) as u32;
+    let r = (sum_r / count) as u8;
+    let g = (sum_g / count) as u8;
+    let b = (sum_b / count) as u8;
+
+    Rgba8::rgb(r, g, b)
+}
 fn main() -> Result<(), Box<std::error::Error>> {
     let img = image::open("examples/monalisa.jpg").unwrap().to_rgba();
 
@@ -135,6 +160,8 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let h = img.height();
 
     let img_raw = img.into_raw();
+
+    let avg_color = avg_color(w, h, &img_raw);
 
     /*let rect = PathBuilder::new()
     .absolute()
@@ -165,6 +192,8 @@ fn main() -> Result<(), Box<std::error::Error>> {
         Rgba8::new(255, 0, 0, 255),
     );
     */
+
+    fill_rect(&mut p, &mut r, 0.0, 0.0, w as f32, h as f32, avg_color);
 
     fill_rect(
         &mut p,
