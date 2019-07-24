@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 image = { version = "0.22", default-features = false, features = ["jpeg", "png_codec"] }
 rand = "0.7"
-raqote = "0.5"
+raqote = "0.6"
 euclid = "0.20"
 sw-composite = "0.5"
 font-kit = "0.3"
