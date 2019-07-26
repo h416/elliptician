@@ -5,9 +5,8 @@ authors = ["h416 <h416@users.noreply.github.com>"]
 edition = "2018"
 
 [dependencies]
+euclid = "0.20"
 image = { version = "0.22", default-features = false, features = ["jpeg", "png_codec"] }
 rand = "0.7"
-raqote = "0.6"
-euclid = "0.20"
-sw-composite = "0.5"
-font-kit = "0.4"
+raqote = { version = "0.6", default-features = false }
+

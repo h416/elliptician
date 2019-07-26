@@ -1,8 +1,6 @@
-//extern crate raqote;
-
 use raqote::*;
 
-use euclid::{Angle, TypedSize2D};
+use euclid::{Angle, Size2D};
 
 use rand::distributions::{Distribution, Uniform};
 
@@ -145,13 +143,13 @@ impl DrawCommand {
     }
 }
 
-fn fill_path(draw_target: &mut DrawTarget, path: &Path, color: SolidSource) {
+fn fill_path(draw_target: &mut DrawTarget, path: &Path, color: Color) {
     let draw_options = DrawOptions {
         blend_mode: BlendMode::SrcOver,
         alpha: color.a as f32 / 255.0,
         antialias: AntialiasMode::Gray,
     };
-    let color2 = SolidSource {
+    let color2 = Color {
         r: color.r,
         g: color.g,
         b: color.b,
@@ -159,33 +157,15 @@ fn fill_path(draw_target: &mut DrawTarget, path: &Path, color: SolidSource) {
     };
     draw_target.fill(&path, &Source::Solid(color2), &draw_options);
 }
-/*
-fn fill_rect(
-    draw_target: &mut DrawTarget,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: SolidSource,
-) {
-    let mut pb = PathBuilder::new();
-    pb.move_to(x, y);
-    pb.line_to(x + width, y);
-    pb.line_to(x + width, y + height);
-    pb.line_to(x, y + height);
-    pb.close();
-    let path = pb.finish();
-    fill_path(draw_target, &path, color);
-}
-*/
-fn fill_elipse(
+
+fn fill_ellipse(
     draw_target: &mut DrawTarget,
     cx: f32,
     cy: f32,
     rx: f32,
     ry: f32,
     angle: f32,
-    color: SolidSource,
+    color: Color,
 ) {
     let radius_max = rx.max(ry);
     if radius_max <= 0.0 {
@@ -225,7 +205,7 @@ fn fill_elipse(
     let t2 = Transform::create_translation(cx, cy);
     let transform: Transform = Transform::create_translation(-cx, -cy)
         .post_rotate(a)
-        .post_mul(&t2);
+        .post_transform(&t2);
     draw_target.set_transform(&transform);
 
     fill_path(draw_target, &path, color);
@@ -260,12 +240,7 @@ fn diff(img: &[u8], draw_target: &DrawTarget) -> (i64, u32, u32) {
                 g2 = g2 * 255 / a2;
                 b2 = b2 * 255 / a2;
             }
-            /*
-            if y < 2 {
-                println!("{} {} {} {}", r1, g1, b1, a1);
-                println!(" {} {} {} {}", r2, g2, b2, a2);
-            }
-            */
+
             let dr = r1 - r2;
             let dg = g1 - g2;
             let db = b1 - b2;
@@ -320,7 +295,7 @@ fn avg_color(w: u32, h: u32, img: &[u8]) -> Color {
 }
 
 fn draw_cmd(draw_target: &mut DrawTarget, cmd: &DrawCommand) {
-    fill_elipse(
+    fill_ellipse(
         draw_target,
         cmd.x,
         cmd.y,
@@ -334,7 +309,7 @@ fn draw_cmd(draw_target: &mut DrawTarget, cmd: &DrawCommand) {
 fn copy_img(src: &DrawTarget, dst: &mut DrawTarget) {
     let w = src.width();
     let h = src.height();
-    let img_rect = IntRect::from_size(TypedSize2D::new(w as i32, h as i32));
+    let img_rect = IntRect::from_size(Size2D::new(w as i32, h as i32));
     let zero_point = IntPoint::zero();
     dst.copy_surface(&src, img_rect, zero_point);
 }
@@ -363,33 +338,6 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
     draw_target.clear(bg_color);
 
-    /*
-        let color2 = SolidSource {
-            r: 0,
-            g: 255,
-            b: 0,
-            a: 128,
-        };
-        fill_rect(&mut draw_target, 0.0, 0.0, 150.0, 150.0, color2);
-
-        let color3 = SolidSource {
-            r: 255,
-            g: 0,
-            b: 0,
-            a: 128,
-        };
-        fill_rect(&mut draw_target, 10.0, 10.0, 300.0, 200.0, color3);
-
-        let color4 = SolidSource {
-            r: 0,
-            g: 0,
-            b: 255,
-            a: 128,
-        };
-        fill_elipse(&mut draw_target, 160.0, 120.0, 180.0, 140.0, 30.0/180.0*PI,, color4);
-
-        fill_elipse(&mut draw_target, 20.0, 20.0, 30.0, 20.0/180.0*PI, 0.0, color3);
-    */
     let mut rng = rand::thread_rng();
 
     let mut backup = DrawTarget::new(w as i32, h as i32);
@@ -462,7 +410,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
 /*
 todo
 
-
+use tmp img to copy once
 
 angle -> rad to degree
 cmd member user int?  i32?
