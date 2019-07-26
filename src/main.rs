@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use raqote::*;
 
 use euclid::{Angle, Size2D};
@@ -7,6 +9,7 @@ use rand::distributions::{Distribution, Uniform};
 type Color = SolidSource;
 
 const PI: f32 = std::f32::consts::PI;
+const PI2: f32 = 2.0_f32 * PI;
 
 const ANGLE_MIN: f32 = -PI / 4.0;
 const ANGLE_MAX: f32 = PI / 4.0;
@@ -143,11 +146,17 @@ impl DrawCommand {
     }
 }
 
-fn fill_path(draw_target: &mut DrawTarget, path: &Path, color: Color) {
+fn fill_path(draw_target: &mut DrawTarget, path: &Path, color: Color, is_antialias: bool) {
+    let antialias;
+    if is_antialias {
+        antialias = AntialiasMode::Gray;
+    } else {
+        antialias = AntialiasMode::None;
+    }
     let draw_options = DrawOptions {
         blend_mode: BlendMode::SrcOver,
-        alpha: color.a as f32 / 255.0,
-        antialias: AntialiasMode::Gray,
+        alpha: color.a as f32 / 255.0_f32,
+        antialias: antialias,
     };
     let color2 = Color {
         r: color.r,
@@ -166,24 +175,21 @@ fn fill_ellipse(
     ry: f32,
     angle: f32,
     color: Color,
+    is_antialias: bool,
 ) {
     let radius_max = rx.max(ry);
-    if radius_max <= 0.0 {
+    if radius_max <= 0.0_f32 {
         return;
     }
-    //let n = 4 * (radius_max.ceil() as usize);
-    /*if n == 0 {
-        return;
-    }*/
+
     let n = 4 + (radius_max.ceil() as usize) / 2;
 
     let mut pb = PathBuilder::new();
-    let mut last_x = 0.0;
-    let mut last_y = 0.0;
+    let mut last_x = 0.0_f32;
+    let mut last_y = 0.0_f32;
     for i in 0..n {
-        let t = (i as f32) * 2.0f32 * PI / (n as f32);
-        let cos_t = t.cos();
-        let sin_t = t.sin();
+        let t = (i as f32) * PI2 / (n as f32);
+        let (sin_t, cos_t) = t.sin_cos();
         let x = cx + rx * cos_t;
         let y = cy + ry * sin_t;
         if i == 0 {
@@ -208,7 +214,7 @@ fn fill_ellipse(
         .post_transform(&t2);
     draw_target.set_transform(&transform);
 
-    fill_path(draw_target, &path, color);
+    fill_path(draw_target, &path, color, is_antialias);
 
     let initial_transform = Transform::identity();
     draw_target.set_transform(&initial_transform);
@@ -226,20 +232,14 @@ fn diff(img: &[u8], draw_target: &DrawTarget) -> (i64, u32, u32) {
         for x in 0..w {
             let index2 = (x + w * y) as usize;
             let index = 4 * index2;
-            let r1 = img[index] as i64;
-            let g1 = img[index + 1] as i64;
-            let b1 = img[index + 2] as i64;
+            let r1 = img[index] as i32;
+            let g1 = img[index + 1] as i32;
+            let b1 = img[index + 2] as i32;
             let color2 = &img2[index2];
 
-            let a2 = ((color2 >> 24) & 0xffu32) as i64;
-            let mut r2 = ((color2 >> 16) & 0xffu32) as i64;
-            let mut g2 = ((color2 >> 8) & 0xffu32) as i64;
-            let mut b2 = ((color2 >> 0) & 0xffu32) as i64;
-            if a2 > 0 {
-                r2 = r2 * 255 / a2;
-                g2 = g2 * 255 / a2;
-                b2 = b2 * 255 / a2;
-            }
+            let r2 = ((color2 >> 16) & 0xffu32) as i32;
+            let g2 = ((color2 >> 8) & 0xffu32) as i32;
+            let b2 = ((color2 >> 0) & 0xffu32) as i32;
 
             let dr = r1 - r2;
             let dg = g1 - g2;
@@ -250,7 +250,7 @@ fn diff(img: &[u8], draw_target: &DrawTarget) -> (i64, u32, u32) {
                 diff_x = x;
                 diff_y = y;
             }
-            sum += val;
+            sum += val as i64;
         }
     }
     (sum, diff_x, diff_y)
@@ -294,7 +294,7 @@ fn avg_color(w: u32, h: u32, img: &[u8]) -> Color {
     }
 }
 
-fn draw_cmd(draw_target: &mut DrawTarget, cmd: &DrawCommand) {
+fn draw_cmd(draw_target: &mut DrawTarget, cmd: &DrawCommand, is_antialias: bool) {
     fill_ellipse(
         draw_target,
         cmd.x,
@@ -303,6 +303,7 @@ fn draw_cmd(draw_target: &mut DrawTarget, cmd: &DrawCommand) {
         cmd.ry,
         cmd.angle,
         cmd.color,
+        is_antialias,
     );
 }
 
@@ -315,15 +316,14 @@ fn copy_img(src: &DrawTarget, dst: &mut DrawTarget) {
 }
 
 fn try_draw(
-    draw_target: &mut DrawTarget,
-    backup: &mut DrawTarget,
+    draw_target: &DrawTarget,
+    tmp_target: &mut DrawTarget,
     img: &[u8],
     cmd: &DrawCommand,
 ) -> i64 {
-    copy_img(draw_target, backup);
-    draw_cmd(draw_target, &cmd);
-    let (score, _diff_x, _diff_y) = diff(&img, &draw_target);
-    copy_img(backup, draw_target);
+    copy_img(draw_target, tmp_target);
+    draw_cmd(tmp_target, &cmd, false);
+    let (score, _diff_x, _diff_y) = diff(&img, &tmp_target);
     score
 }
 fn main() -> Result<(), Box<std::error::Error>> {
@@ -340,17 +340,19 @@ fn main() -> Result<(), Box<std::error::Error>> {
 
     let mut rng = rand::thread_rng();
 
-    let mut backup = DrawTarget::new(w as i32, h as i32);
+    let mut tmp_target = DrawTarget::new(w as i32, h as i32);
     let alpha = 128;
 
     let mut best_score = 0;
     let mut best_cmd = DrawCommand::rand(w, h, 0, 0, &img_raw, &mut rng, alpha);
 
     for t in 0..1000 {
+        let start = Instant::now();
         let (_score, diff_x, diff_y) = diff(&img_raw, &draw_target);
+
         for i in 0..32 {
             let cmd = DrawCommand::rand(w, h, diff_x, diff_y, &img_raw, &mut rng, alpha);
-            let score = try_draw(&mut draw_target, &mut backup, &img_raw, &cmd);
+            let score = try_draw(&draw_target, &mut tmp_target, &img_raw, &cmd);
             if i == 0 || score < best_score {
                 best_score = score;
                 best_cmd = cmd;
@@ -359,45 +361,18 @@ fn main() -> Result<(), Box<std::error::Error>> {
             // optimize
             for _j in 0..64 {
                 let cmd = DrawCommand::mutate(w, h, &best_cmd, &mut rng);
-                let score = try_draw(&mut draw_target, &mut backup, &img_raw, &cmd);
+                let score = try_draw(&draw_target, &mut tmp_target, &img_raw, &cmd);
                 if score < best_score {
                     best_score = score;
                     best_cmd = cmd;
                 }
             }
         }
-
-        println!("{} : {}", t, best_score);
-        /*
-        {
-            copy_img(&draw_target, &mut backup);
-            {
-                //draw best cmd
-                draw_cmd(&mut draw_target, &best_cmd);
-
-                let img_name = format!("result_{:06}-no.png", t);
-                draw_target.write_png(img_name).unwrap();
-            }
-            copy_img(&backup, &mut draw_target);
-        }
-
-        // optimize
-        let mut best_count = 0;
-        let optimize_count = 1; //8192;
-        for j in 0..optimize_count {
-            let cmd = DrawCommand::mutate(w, h, &best_cmd, &mut rng);
-            let score = try_draw(&mut draw_target, &mut backup, &img_raw, &cmd);
-            if score < best_score {
-                best_score = score;
-                best_cmd = cmd;
-                best_count = j;
-            }
-        }
-        println!("{} : {} opt {}", t, best_score, best_count);
-        */
+        let duration = start.elapsed();
+        println!("{} : {} {:?}", t, best_score, duration);
 
         //draw best cmd
-        draw_cmd(&mut draw_target, &best_cmd);
+        draw_cmd(&mut draw_target, &best_cmd, true);
 
         let img_name = format!("result_{:06}.png", t);
         draw_target.write_png(img_name).unwrap();
@@ -410,7 +385,6 @@ fn main() -> Result<(), Box<std::error::Error>> {
 /*
 todo
 
-use tmp img to copy once
 
 angle -> rad to degree
 cmd member user int?  i32?
@@ -423,9 +397,6 @@ diff use different color space
 
 parse argument
 
-optimize vectorize
-optimize cpu
-
 resize in calc, save in original size
 write svg check size
 write command
@@ -434,6 +405,5 @@ optimize svg
  global optimize
   remove unneeded cmd
   mutate cmd
-initial guess. random -> pos color
 
 */
