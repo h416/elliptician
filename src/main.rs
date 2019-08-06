@@ -326,8 +326,14 @@ fn try_draw(
     let (score, _diff_x, _diff_y) = diff(&img, &tmp_target);
     score
 }
+
 fn main() -> Result<(), Box<std::error::Error>> {
-    let img = image::open("examples/monalisa_s.jpg").unwrap().to_rgba();
+    let mut args = pico_args::Arguments::from_env();
+    let path = args
+        .value_from_str(["--path", "-p"])?
+        .unwrap_or("examples/monalisa_s.jpg".to_string());
+
+    let img = image::open(path).unwrap().to_rgba();
     let w = img.width();
     let h = img.height();
     println!("{}x{}", w, h);
