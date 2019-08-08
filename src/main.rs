@@ -49,18 +49,15 @@ impl DrawCommand {
     pub fn rand(
         w: u32,
         h: u32,
-        xx: u32,
-        yy: u32,
+        t_ratio: f32,
         img: &[u8],
         rng: &mut rand::rngs::ThreadRng,
         alpha: u8,
     ) -> DrawCommand {
         let w1 = w - 1;
         let h1 = h - 1;
-        //let ux: u32 = rnd(rng, 0, w1) as u32;
-        //let uy: u32 = rnd(rng, 0, h1) as u32;
-        let ux = clamp(xx as i32 + rnd(rng, -16, 16), 0, w1 as i32) as u32;
-        let uy = clamp(yy as i32 + rnd(rng, -16, 16), 0, h1 as i32) as u32;
+        let ux: u32 = rnd(rng, 0, w1) as u32;
+        let uy: u32 = rnd(rng, 0, h1) as u32;
         let x = ux as f32;
         let y = uy as f32;
 
@@ -69,9 +66,17 @@ impl DrawCommand {
         let g: u8 = img[index + 1];
         let b: u8 = img[index + 2];
 
-        let r_max = (w1 + h1) / 16;
-        let rx: f32 = rnd(rng, 1, r_max) as f32;
-        let ry: f32 = rnd(rng, 1, r_max) as f32;
+        //let r_max = (w1 + h1) / 16;
+        let t1 = 0.5+0.5*(1.0 - t_ratio);
+        let t2 = t1*t1;
+        let t4 = t2*t2;
+        let size_ratio = t4;
+        let rx_max = 8 + (size_ratio * (w1 as f32)) as u32;
+        let ry_max = 8 + (size_ratio * (h1 as f32)) as u32;
+        let rx_min = 1 + rx_max/64;
+        let ry_min = 1 + ry_max/64;
+        let rx: f32 = rnd(rng, rx_min, rx_max) as f32;
+        let ry: f32 = rnd(rng, ry_min, ry_max) as f32;
         let angle: f32 = rnd(rng, ANGLE_MIN, ANGLE_MAX);
         let color = Color {
             r: r,
@@ -106,14 +111,16 @@ impl DrawCommand {
         let mut g = cmd.color.g;
         let mut b = cmd.color.b;
         let a = cmd.color.a;
+        let rnd_size_x = 1.0 + w1 / 20.0;
+        let rnd_size_y = 1.0 + h1 / 20.0;
 
         let prop = rnd(rng, 0, 3) as u8;
         if prop == 0 {
-            x = clamp(x + rnd(rng, -16.0, 16.0), 0.0, w1);
-            y = clamp(y + rnd(rng, -16.0, 16.0), 0.0, h1);
+            x = clamp(x + rnd(rng, -rnd_size_x, rnd_size_x), 0.0, w1);
+            y = clamp(y + rnd(rng, -rnd_size_y, rnd_size_y), 0.0, h1);
         } else if prop == 1 {
-            rx = clamp(rx + rnd(rng, -16.0, 16.0), 0.0, w1);
-            ry = clamp(ry + rnd(rng, -16.0, 16.0), 0.0, h1);
+            rx = clamp(rx + rnd(rng, rnd_size_x, rnd_size_x), 0.0, w1);
+            ry = clamp(ry + rnd(rng, rnd_size_y, rnd_size_y), 0.0, h1);
         } else if prop == 2 {
             angle += rnd(rng, -PI / 180.0 * 4.0, PI / 180.0 * 4.0);
             // angle = angle.min(ANGLE_MAX).max(ANGLE_MIN);
@@ -124,9 +131,9 @@ impl DrawCommand {
                 angle -= 2.0 * PI;
             }
         } else if prop == 3 {
-            r = clamp(r as i32 + rnd(rng, -16, 16), 0, 255) as u8;
-            g = clamp(g as i32 + rnd(rng, -16, 16), 0, 255) as u8;
-            b = clamp(b as i32 + rnd(rng, -16, 16), 0, 255) as u8;
+            r = clamp(r as i32 + rnd(rng, -8, 8), 0, 255) as u8;
+            g = clamp(g as i32 + rnd(rng, -8, 8), 0, 255) as u8;
+            b = clamp(b as i32 + rnd(rng, -8, 8), 0, 255) as u8;
         }
         let color = Color {
             r: r,
@@ -220,14 +227,11 @@ fn fill_ellipse(
     draw_target.set_transform(&initial_transform);
 }
 
-fn diff(img: &[u8], draw_target: &DrawTarget) -> (i64, u32, u32) {
+fn diff(img: &[u8], draw_target: &DrawTarget) -> i64 {
     let w = draw_target.width() as u32;
     let h = draw_target.height() as u32;
     let img2: &[u32] = draw_target.get_data();
     let mut sum = 0;
-    let mut max_diff = 0;
-    let mut diff_x = 0;
-    let mut diff_y = 0;
     for y in 0..h {
         for x in 0..w {
             let index2 = (x + w * y) as usize;
@@ -245,15 +249,10 @@ fn diff(img: &[u8], draw_target: &DrawTarget) -> (i64, u32, u32) {
             let dg = g1 - g2;
             let db = b1 - b2;
             let val = dr * dr + dg * dg + db * db;
-            if val > max_diff {
-                max_diff = val;
-                diff_x = x;
-                diff_y = y;
-            }
             sum += val as i64;
         }
     }
-    (sum, diff_x, diff_y)
+    sum
 }
 
 fn avg_color(w: u32, h: u32, img: &[u8]) -> Color {
@@ -322,8 +321,8 @@ fn try_draw(
     cmd: &DrawCommand,
 ) -> i64 {
     copy_img(draw_target, tmp_target);
-    draw_cmd(tmp_target, &cmd, false);
-    let (score, _diff_x, _diff_y) = diff(&img, &tmp_target);
+    draw_cmd(tmp_target, &cmd, true);
+    let score = diff(&img, &tmp_target);
     score
 }
 
@@ -332,6 +331,8 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let path = args
         .value_from_str(["--path", "-p"])?
         .unwrap_or("examples/monalisa_s.jpg".to_string());
+    let num = args.value_from_str(["--num", "-n"])?.unwrap_or(1000);
+    let alpha = args.value_from_str(["--alpha", "-a"])?.unwrap_or(200);
 
     let img = image::open(path).unwrap().to_rgba();
     let w = img.width();
@@ -347,17 +348,17 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let mut rng = rand::thread_rng();
 
     let mut tmp_target = DrawTarget::new(w as i32, h as i32);
-    let alpha = 128;
 
-    let mut best_score = 0;
-    let mut best_cmd = DrawCommand::rand(w, h, 0, 0, &img_raw, &mut rng, alpha);
+    let mut global_best_score = diff(&img_raw, &draw_target);
+    let mut best_cmd = DrawCommand::rand(w, h, 0.0, &img_raw, &mut rng, alpha);
 
-    for t in 0..1000 {
+    for t in 0..num {
+        let t_ratio = (t as f32) / (num as f32);
         let start = Instant::now();
-        let (_score, diff_x, diff_y) = diff(&img_raw, &draw_target);
 
+        let mut best_score = 0;
         for i in 0..32 {
-            let cmd = DrawCommand::rand(w, h, diff_x, diff_y, &img_raw, &mut rng, alpha);
+            let cmd = DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha);
             let score = try_draw(&draw_target, &mut tmp_target, &img_raw, &cmd);
             if i == 0 || score < best_score {
                 best_score = score;
@@ -375,10 +376,13 @@ fn main() -> Result<(), Box<std::error::Error>> {
             }
         }
         let duration = start.elapsed();
-        println!("{} : {} {:?}", t, best_score, duration);
+        println!("{} : {} {} {:?}", t, global_best_score, best_score, duration);
 
-        //draw best cmd
-        draw_cmd(&mut draw_target, &best_cmd, true);
+        if best_score < global_best_score {
+            global_best_score = best_score;
+            //draw best cmd
+            draw_cmd(&mut draw_target, &best_cmd, true);
+        }
 
         let img_name = format!("result_{:06}.png", t);
         draw_target.write_png(img_name).unwrap();
@@ -401,7 +405,8 @@ profiling
 
 diff use different color space
 
-parse argument
+
+paint changed location in alpha white -> score weight
 
 resize in calc, save in original size
 write svg check size
