@@ -1,12 +1,12 @@
+use euclid::{Angle, Size2D};
+use lab::Lab;
+use rand::distributions::{Distribution, Uniform};
+use raqote::*;
 use std::time::Instant;
 
-use raqote::*;
-
-use euclid::{Angle, Size2D};
-
-use rand::distributions::{Distribution, Uniform};
-
 type Color = SolidSource;
+
+type ColorTable = Vec<Lab>;
 
 const PI: f32 = std::f32::consts::PI;
 const PI2: f32 = 2.0_f32 * PI;
@@ -53,6 +53,7 @@ impl DrawCommand {
         img: &[u8],
         rng: &mut rand::rngs::ThreadRng,
         alpha: u8,
+        brush_scale: f32,
     ) -> DrawCommand {
         let w1 = w - 1;
         let h1 = h - 1;
@@ -67,14 +68,13 @@ impl DrawCommand {
         let b: u8 = img[index + 2];
 
         //let r_max = (w1 + h1) / 16;
-        let t1 = 0.5+0.5*(1.0 - t_ratio);
-        let t2 = t1*t1;
-        let t4 = t2*t2;
-        let size_ratio = t4;
-        let rx_max = 8 + (size_ratio * (w1 as f32)) as u32;
-        let ry_max = 8 + (size_ratio * (h1 as f32)) as u32;
-        let rx_min = 1 + rx_max/64;
-        let ry_min = 1 + ry_max/64;
+        let t1 = brush_scale * (1.0 - t_ratio);
+        let t2 = t1 * t1;
+        let size_ratio = t2;
+        let rx_max = 4 + (size_ratio * 0.5 * (w1 as f32)) as u32;
+        let ry_max = 4 + (size_ratio * 0.5 * (h1 as f32)) as u32;
+        let rx_min = 1 + rx_max / 16;
+        let ry_min = 1 + ry_max / 16;
         let rx: f32 = rnd(rng, rx_min, rx_max) as f32;
         let ry: f32 = rnd(rng, ry_min, ry_max) as f32;
         let angle: f32 = rnd(rng, ANGLE_MIN, ANGLE_MAX);
@@ -119,8 +119,8 @@ impl DrawCommand {
             x = clamp(x + rnd(rng, -rnd_size_x, rnd_size_x), 0.0, w1);
             y = clamp(y + rnd(rng, -rnd_size_y, rnd_size_y), 0.0, h1);
         } else if prop == 1 {
-            rx = clamp(rx + rnd(rng, rnd_size_x, rnd_size_x), 0.0, w1);
-            ry = clamp(ry + rnd(rng, rnd_size_y, rnd_size_y), 0.0, h1);
+            rx = clamp(rx + rnd(rng, -rnd_size_x, rnd_size_x), 0.0, 0.5 * w1);
+            ry = clamp(ry + rnd(rng, -rnd_size_y, rnd_size_y), 0.0, 0.5 * h1);
         } else if prop == 2 {
             angle += rnd(rng, -PI / 180.0 * 4.0, PI / 180.0 * 4.0);
             // angle = angle.min(ANGLE_MAX).max(ANGLE_MIN);
@@ -227,28 +227,26 @@ fn fill_ellipse(
     draw_target.set_transform(&initial_transform);
 }
 
-fn diff(img: &[u8], draw_target: &DrawTarget) -> i64 {
+#[inline(always)]
+fn rgb2color(r: u8, g: u8, b: u8) -> u32 {
+    ((r as u32) << 16_u32) + ((g as u32) << 8_u32) + (b as u32)
+}
+
+fn diff(rgb2lab: &ColorTable, lab_img: &[Lab], draw_target: &DrawTarget) -> i64 {
     let w = draw_target.width() as u32;
     let h = draw_target.height() as u32;
     let img2: &[u32] = draw_target.get_data();
     let mut sum = 0;
     for y in 0..h {
         for x in 0..w {
-            let index2 = (x + w * y) as usize;
-            let index = 4 * index2;
-            let r1 = img[index] as i32;
-            let g1 = img[index + 1] as i32;
-            let b1 = img[index + 2] as i32;
-            let color2 = &img2[index2];
-
-            let r2 = ((color2 >> 16) & 0xffu32) as i32;
-            let g2 = ((color2 >> 8) & 0xffu32) as i32;
-            let b2 = ((color2 >> 0) & 0xffu32) as i32;
-
-            let dr = r1 - r2;
-            let dg = g1 - g2;
-            let db = b1 - b2;
-            let val = dr * dr + dg * dg + db * db;
+            let index = (x + w * y) as usize;
+            let color2 = img2[index];
+            let lab1 = lab_img[index];
+            let lab2 = rgb2lab[(color2 & 0xffffff_u32) as usize];
+            let dl = lab1.l - lab2.l;
+            let da = lab1.a - lab2.a;
+            let db = lab1.b - lab2.b;
+            let val = (dl * dl + da * da + db * db) as i64;
             sum += val as i64;
         }
     }
@@ -315,51 +313,112 @@ fn copy_img(src: &DrawTarget, dst: &mut DrawTarget) {
 }
 
 fn try_draw(
+    rgb2lab: &ColorTable,
     draw_target: &DrawTarget,
     tmp_target: &mut DrawTarget,
-    img: &[u8],
+    lab_img: &[Lab],
     cmd: &DrawCommand,
 ) -> i64 {
     copy_img(draw_target, tmp_target);
     draw_cmd(tmp_target, &cmd, true);
-    let score = diff(&img, &tmp_target);
+    let score = diff(&rgb2lab, &lab_img, &tmp_target);
     score
 }
 
+fn img2lab(rgb2lab: &ColorTable, w: u32, h: u32, img: &[u8]) -> Vec<Lab> {
+    let mut result = Vec::new();
+
+    for y in 0..h {
+        for x in 0..w {
+            let index2 = (x + w * y) as usize;
+            let index = 4 * index2;
+            let r = img[index];
+            let g = img[index + 1];
+            let b = img[index + 2];
+            let color = rgb2color(r, g, b);
+            let lab = rgb2lab[color as usize];
+            result.push(lab);
+        }
+    }
+
+    result
+}
+
+fn create_rgb2lab() -> ColorTable {
+    let mut result = Vec::new();
+    let lab0 = Lab::from_rgb(&[0, 0, 0]);
+    result.resize(16777216, lab0);
+    for r in 0..=255 {
+        for g in 0..=255 {
+            for b in 0..=255 {
+                let color = rgb2color(r, g, b);
+                let lab = Lab::from_rgb(&[r, g, b]);
+                result[color as usize] = lab;
+            }
+        }
+    }
+    result
+}
+fn draw_bg(draw_target: &mut DrawTarget, bg_color_string: &str, w: u32, h: u32, img: &[u8]) {
+    println!("bg_color_string:{:?}", &bg_color_string);
+    let bg_color;
+    if bg_color_string == "avg" {
+        bg_color = avg_color(w, h, &img);
+    } else {
+        let rgb = read_color::rgb(&mut bg_color_string.chars()).unwrap();
+        bg_color = Color {
+            r: rgb[0],
+            g: rgb[1],
+            b: rgb[2],
+            a: 0xff,
+        };
+    }
+    println!("bg_color:{:?}", &bg_color);
+    draw_target.clear(bg_color);
+}
 fn main() -> Result<(), Box<std::error::Error>> {
     let mut args = pico_args::Arguments::from_env();
     let path = args
         .value_from_str(["--path", "-p"])?
         .unwrap_or("examples/monalisa_s.jpg".to_string());
     let num = args.value_from_str(["--num", "-n"])?.unwrap_or(1000);
-    let alpha = args.value_from_str(["--alpha", "-a"])?.unwrap_or(200);
+    let alpha = args.value_from_str(["--alpha", "-a"])?.unwrap_or(160);
+    let brush_scale: f32 = args
+        .value_from_str(["--brush-scale", "-b"])?
+        .unwrap_or(0.75);
+    let bg_color_string = args
+        .value_from_str(["--bg-color", "-bg"])?
+        .unwrap_or("avg".to_string());
 
     let img = image::open(path).unwrap().to_rgba();
     let w = img.width();
     let h = img.height();
     println!("{}x{}", w, h);
     let img_raw = img.into_raw();
-    let bg_color = avg_color(w, h, &img_raw);
+
+    let rgb2lab = create_rgb2lab();
+    let lab_img = img2lab(&rgb2lab, w, h, &img_raw);
 
     let mut draw_target = DrawTarget::new(w as i32, h as i32);
 
-    draw_target.clear(bg_color);
+    draw_bg(&mut draw_target, &bg_color_string, w, h, &img_raw);
 
     let mut rng = rand::thread_rng();
 
     let mut tmp_target = DrawTarget::new(w as i32, h as i32);
 
-    let mut global_best_score = diff(&img_raw, &draw_target);
-    let mut best_cmd = DrawCommand::rand(w, h, 0.0, &img_raw, &mut rng, alpha);
+    let mut global_best_score = diff(&rgb2lab, &lab_img, &draw_target);
 
     for t in 0..num {
         let t_ratio = (t as f32) / (num as f32);
         let start = Instant::now();
 
         let mut best_score = 0;
+        let mut best_cmd = DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha, brush_scale);
+
         for i in 0..32 {
-            let cmd = DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha);
-            let score = try_draw(&draw_target, &mut tmp_target, &img_raw, &cmd);
+            let cmd = DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha, brush_scale);
+            let score = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd);
             if i == 0 || score < best_score {
                 best_score = score;
                 best_cmd = cmd;
@@ -368,7 +427,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
             // optimize
             for _j in 0..64 {
                 let cmd = DrawCommand::mutate(w, h, &best_cmd, &mut rng);
-                let score = try_draw(&draw_target, &mut tmp_target, &img_raw, &cmd);
+                let score = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd);
                 if score < best_score {
                     best_score = score;
                     best_cmd = cmd;
@@ -376,9 +435,13 @@ fn main() -> Result<(), Box<std::error::Error>> {
             }
         }
         let duration = start.elapsed();
-        println!("{} : {} {} {:?}", t, global_best_score, best_score, duration);
+        println!(
+            "{} : {} {} {:?}",
+            t, global_best_score, best_score, duration
+        );
 
         if best_score < global_best_score {
+            println!("   {:?}", &best_cmd);
             global_best_score = best_score;
             //draw best cmd
             draw_cmd(&mut draw_target, &best_cmd, true);
@@ -402,8 +465,6 @@ cmd member user int?  i32?
 check small draw  1x1 2x2 3x2 2x1
 
 profiling
-
-diff use different color space
 
 
 paint changed location in alpha white -> score weight
