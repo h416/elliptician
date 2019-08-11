@@ -12,3 +12,4 @@ raqote = { version = "0.6", default-features = false }
 pico-args = "0.2"
 lab = "0.7"
 read_color = "1.0"
+rayon = "1.1"

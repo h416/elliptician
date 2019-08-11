@@ -2,6 +2,8 @@ use euclid::{Angle, Size2D};
 use lab::Lab;
 use rand::distributions::{Distribution, Uniform};
 use raqote::*;
+use rayon::prelude::*;
+use std::sync::Mutex;
 use std::time::Instant;
 
 type Color = SolidSource;
@@ -11,7 +13,7 @@ type ColorTable = Vec<Lab>;
 const PI: f32 = std::f32::consts::PI;
 const PI2: f32 = 2.0_f32 * PI;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawCommand {
     x: u32,
     y: u32,
@@ -62,6 +64,23 @@ fn brush_size(t_ratio: f32, brush_scale: f32, image_size: u32) -> u32 {
 }
 
 impl DrawCommand {
+    pub fn new() -> DrawCommand {
+        let color = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0xff,
+        };
+        DrawCommand {
+            x: 0,
+            y: 0,
+            rx: 0,
+            ry: 0,
+            angle: 0,
+            color,
+        }
+    }
+
     pub fn rand(
         w: u32,
         h: u32,
@@ -367,6 +386,7 @@ fn create_rgb2lab() -> ColorTable {
     }
     result
 }
+
 fn draw_bg(draw_target: &mut DrawTarget, bg_color_string: &str, w: u32, h: u32, img: &[u8]) {
     println!("bg_color_string:{:?}", &bg_color_string);
     let bg_color;
@@ -384,6 +404,35 @@ fn draw_bg(draw_target: &mut DrawTarget, bg_color_string: &str, w: u32, h: u32, 
     println!("bg_color:{:?}", &bg_color);
     draw_target.clear(bg_color);
 }
+
+fn draw_target_from_vec(w: u32, h: u32, img_data: &Vec<u32>) -> DrawTarget {
+    let mut draw_target = DrawTarget::new(w as i32, h as i32);
+
+    let data = draw_target.get_data_mut();
+    for y in 0..h {
+        for x in 0..w {
+            let index = (x + w * y) as usize;
+            data[index] = img_data[index];
+        }
+    }
+    draw_target
+}
+
+fn vec_from_draw_target(draw_target_mutex: &Mutex<DrawTarget>) -> Vec<u32> {
+    let draw_target = draw_target_mutex.lock().unwrap();
+    let mut draw_target_data: Vec<u32> = Vec::new();
+    let w = draw_target.width();
+    let h = draw_target.height();
+    let data = draw_target.get_data();
+    for y in 0..h {
+        for x in 0..w {
+            let index = (x + w * y) as usize;
+            draw_target_data.push(data[index]);
+        }
+    }
+    draw_target_data
+}
+
 fn main() -> Result<(), Box<std::error::Error>> {
     let mut args = pico_args::Arguments::from_env();
     let path = args
@@ -397,6 +446,10 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let bg_color_string = args
         .value_from_str(["--bg-color", "-bg"])?
         .unwrap_or("avg".to_string());
+    let seed_count = args.value_from_str(["--seed-count", "-s"])?.unwrap_or(32);
+    let optimize_count = args
+        .value_from_str(["--optimize-count", "-o"])?
+        .unwrap_or(64);
 
     let img = image::open(path).unwrap().to_rgba();
     let w = img.width();
@@ -407,59 +460,74 @@ fn main() -> Result<(), Box<std::error::Error>> {
     let rgb2lab = create_rgb2lab();
     let lab_img = img2lab(&rgb2lab, w, h, &img_raw);
 
-    let mut draw_target = DrawTarget::new(w as i32, h as i32);
-
-    draw_bg(&mut draw_target, &bg_color_string, w, h, &img_raw);
-
-    let mut rng = rand::thread_rng();
-
-    let mut tmp_target = DrawTarget::new(w as i32, h as i32);
-
-    let mut global_best_score = diff(&rgb2lab, &lab_img, &draw_target);
+    let mut global_best_score;
+    let draw_target_mutex = Mutex::new(DrawTarget::new(w as i32, h as i32));
+    {
+        let mut draw_target = draw_target_mutex.lock().unwrap();
+        draw_bg(&mut draw_target, &bg_color_string, w, h, &img_raw);
+        global_best_score = diff(&rgb2lab, &lab_img, &draw_target);
+    }
 
     for t in 0..num {
         let t_ratio = (t as f32) / (num as f32);
         let start = Instant::now();
 
-        let mut best_score = 0;
-        let mut best_cmd = DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha, brush_scale);
+        let draw_target_data = vec_from_draw_target(&draw_target_mutex);
 
-        for i in 0..32 {
-            let cmd = DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha, brush_scale);
-            let score = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd);
+        let results: Vec<(i64, DrawCommand)> = (0..seed_count)
+            .into_par_iter()
+            .map(|_| {
+                let mut rng = rand::thread_rng();
+                let mut tmp_target = DrawTarget::new(w as i32, h as i32);
+                let src_target = draw_target_from_vec(w, h, &draw_target_data);
+
+                let mut best_cmd =
+                    DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha, brush_scale);
+                let mut best_score =
+                    try_draw(&rgb2lab, &src_target, &mut tmp_target, &lab_img, &best_cmd);
+
+                // optimize
+                for _j in 0..optimize_count {
+                    let (cmd, cmd2) =
+                        DrawCommand::mutate(w, h, t_ratio, &best_cmd, &mut rng, brush_scale);
+                    let score;
+                    if cmd == best_cmd {
+                        score = best_score;
+                    } else {
+                        score = try_draw(&rgb2lab, &src_target, &mut tmp_target, &lab_img, &cmd);
+                    }
+                    if score < best_score {
+                        best_score = score;
+                        best_cmd = cmd;
+                    } else if cmd != cmd2 {
+                        let score2;
+                        if cmd2 == best_cmd {
+                            score2 = best_score;
+                        } else {
+                            score2 =
+                                try_draw(&rgb2lab, &src_target, &mut tmp_target, &lab_img, &cmd2);
+                        }
+                        if score2 < best_score {
+                            best_score = score2;
+                            best_cmd = cmd2;
+                        }
+                    }
+                }
+
+                (best_score, best_cmd)
+            })
+            .collect();
+
+        let mut best_score = 0;
+        let mut best_cmd = DrawCommand::new();
+        for i in 0..results.len() {
+            let (score, cmd) = results[i as usize];
             if i == 0 || score < best_score {
                 best_score = score;
                 best_cmd = cmd;
             }
-
-            // optimize
-            let optimize_count = 64;
-            for _j in 0..optimize_count {
-                let (cmd, cmd2) =
-                    DrawCommand::mutate(w, h, t_ratio, &best_cmd, &mut rng, brush_scale);
-                let score;
-                if cmd == best_cmd {
-                    score = best_score;
-                } else {
-                    score = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd);
-                }
-                if score < best_score {
-                    best_score = score;
-                    best_cmd = cmd;
-                } else if cmd != cmd2 {
-                    let score2;
-                    if cmd2 == best_cmd {
-                        score2 = best_score;
-                    } else {
-                        score2 = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd2);
-                    }
-                    if score2 < best_score {
-                        best_score = score2;
-                        best_cmd = cmd2;
-                    }
-                }
-            }
         }
+
         let duration = start.elapsed();
         println!(
             "{} : {} {} {:?}",
@@ -469,15 +537,22 @@ fn main() -> Result<(), Box<std::error::Error>> {
         if best_score < global_best_score {
             println!("   {:?}", &best_cmd);
             global_best_score = best_score;
+            let mut draw_target = draw_target_mutex.lock().unwrap();
             //draw best cmd
             draw_cmd(&mut draw_target, &best_cmd, true);
         }
 
-        let img_name = format!("result_{:06}.png", t);
-        draw_target.write_png(img_name).unwrap();
+        {
+            let draw_target = draw_target_mutex.lock().unwrap();
+            let img_name = format!("result_{:06}.png", t);
+            draw_target.write_png(img_name).unwrap();
+        }
     }
 
-    draw_target.write_png("out.png").unwrap();
+    {
+        let draw_target = draw_target_mutex.lock().unwrap();
+        draw_target.write_png("out.png").unwrap();
+    }
 
     Ok(())
 }
@@ -485,11 +560,9 @@ fn main() -> Result<(), Box<std::error::Error>> {
 todo
 
 
-parse seed_count optimize_count
 
 check small draw  1x1 2x2 3x2 2x1
 
-use multi core
 
 paint changed location in alpha white -> score weight
 write svg check size
