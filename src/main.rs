@@ -11,16 +11,13 @@ type ColorTable = Vec<Lab>;
 const PI: f32 = std::f32::consts::PI;
 const PI2: f32 = 2.0_f32 * PI;
 
-const ANGLE_MIN: f32 = -PI / 4.0;
-const ANGLE_MAX: f32 = PI / 4.0;
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DrawCommand {
-    x: f32,
-    y: f32,
-    rx: f32,
-    ry: f32,
-    angle: f32,
+    x: u32,
+    y: u32,
+    rx: u32,
+    ry: u32,
+    angle: i32, //degree
     color: Color,
 }
 
@@ -45,6 +42,25 @@ where
     }
 }
 
+fn mod_angle(angle: i32) -> i32 {
+    let mut res = angle;
+    if res < -90 {
+        res += 180;
+    }
+    if angle > 90 {
+        res -= 180;
+    }
+    res
+}
+
+fn brush_size(t_ratio: f32, brush_scale: f32, image_size: u32) -> u32 {
+    let t1 = brush_scale * (1.0 - t_ratio);
+    let t2 = t1 * t1;
+    let size_ratio = t2;
+    let size = 1 + (size_ratio * 0.5 * (image_size as f32)) as u32;
+    size
+}
+
 impl DrawCommand {
     pub fn rand(
         w: u32,
@@ -57,27 +73,21 @@ impl DrawCommand {
     ) -> DrawCommand {
         let w1 = w - 1;
         let h1 = h - 1;
-        let ux: u32 = rnd(rng, 0, w1) as u32;
-        let uy: u32 = rnd(rng, 0, h1) as u32;
-        let x = ux as f32;
-        let y = uy as f32;
+        let x = rnd(rng, 0, w1);
+        let y = rnd(rng, 0, h1);
 
-        let index = 4 * (ux + w * uy) as usize;
-        let r: u8 = img[index];
-        let g: u8 = img[index + 1];
-        let b: u8 = img[index + 2];
+        let index = 4 * (x + w * y) as usize;
+        let r = img[index];
+        let g = img[index + 1];
+        let b = img[index + 2];
 
-        //let r_max = (w1 + h1) / 16;
-        let t1 = brush_scale * (1.0 - t_ratio);
-        let t2 = t1 * t1;
-        let size_ratio = t2;
-        let rx_max = 4 + (size_ratio * 0.5 * (w1 as f32)) as u32;
-        let ry_max = 4 + (size_ratio * 0.5 * (h1 as f32)) as u32;
+        let rx_max = brush_size(t_ratio, brush_scale, w1);
+        let ry_max = brush_size(t_ratio, brush_scale, h1);
         let rx_min = 1 + rx_max / 16;
         let ry_min = 1 + ry_max / 16;
-        let rx: f32 = rnd(rng, rx_min, rx_max) as f32;
-        let ry: f32 = rnd(rng, ry_min, ry_max) as f32;
-        let angle: f32 = rnd(rng, ANGLE_MIN, ANGLE_MAX);
+        let rx = rnd(rng, rx_min, rx_max);
+        let ry = rnd(rng, ry_min, ry_max);
+        let angle = rnd(rng, -90, 90);
         let color = Color {
             r: r,
             g: g,
@@ -95,61 +105,61 @@ impl DrawCommand {
     }
 
     pub fn mutate(
-        width: u32,
-        height: u32,
-        cmd: &DrawCommand,
+        w: u32,
+        h: u32,
+        t_ratio: f32,
+        original_cmd: &DrawCommand,
         rng: &mut rand::rngs::ThreadRng,
-    ) -> DrawCommand {
-        let w1: f32 = (width - 1) as f32;
-        let h1: f32 = (height - 1) as f32;
-        let mut x = cmd.x;
-        let mut y = cmd.y;
-        let mut rx = cmd.rx;
-        let mut ry = cmd.ry;
-        let mut angle = cmd.angle;
-        let mut r = cmd.color.r;
-        let mut g = cmd.color.g;
-        let mut b = cmd.color.b;
-        let a = cmd.color.a;
-        let rnd_size_x = 1.0 + w1 / 20.0;
-        let rnd_size_y = 1.0 + h1 / 20.0;
+        brush_scale: f32,
+    ) -> (DrawCommand, DrawCommand) {
+        let w1 = w - 1;
+        let h1 = h - 1;
 
-        let prop = rnd(rng, 0, 3) as u8;
+        let mut cmd1 = original_cmd.clone();
+        //inverse command
+        let mut cmd2 = original_cmd.clone();
+
+        let prop = rnd(rng, 0, 7) as u8;
         if prop == 0 {
-            x = clamp(x + rnd(rng, -rnd_size_x, rnd_size_x), 0.0, w1);
-            y = clamp(y + rnd(rng, -rnd_size_y, rnd_size_y), 0.0, h1);
+            let dx_max = 2 + (w1 / 100);
+            let dx = rnd(rng, 1, dx_max);
+            cmd1.x = clamp(cmd1.x + dx, 0, w1);
+            cmd2.x = clamp(cmd2.x - dx, 0, w1);
         } else if prop == 1 {
-            rx = clamp(rx + rnd(rng, -rnd_size_x, rnd_size_x), 0.0, 0.5 * w1);
-            ry = clamp(ry + rnd(rng, -rnd_size_y, rnd_size_y), 0.0, 0.5 * h1);
+            let dy_max = 2 + (h1 / 100);
+            let dy = rnd(rng, 1, dy_max);
+            cmd1.y = clamp(cmd1.y + dy, 0, h1);
+            cmd2.y = clamp(cmd2.y - dy, 0, h1);
         } else if prop == 2 {
-            angle += rnd(rng, -PI / 180.0 * 4.0, PI / 180.0 * 4.0);
-            // angle = angle.min(ANGLE_MAX).max(ANGLE_MIN);
-            if angle < -PI {
-                angle += 2.0 * PI;
-            }
-            if angle > PI {
-                angle -= 2.0 * PI;
-            }
+            let dx_max = brush_size(t_ratio, brush_scale, w1);
+            let dx = rnd(rng, 1, dx_max);
+            cmd1.rx = clamp(cmd1.rx + dx, 1, w1 / 2);
+            cmd2.rx = clamp(cmd2.rx - dx, 1, w1 / 2);
         } else if prop == 3 {
-            r = clamp(r as i32 + rnd(rng, -8, 8), 0, 255) as u8;
-            g = clamp(g as i32 + rnd(rng, -8, 8), 0, 255) as u8;
-            b = clamp(b as i32 + rnd(rng, -8, 8), 0, 255) as u8;
+            let dy_max = brush_size(t_ratio, brush_scale, h1);
+            let dy = rnd(rng, 1, dy_max);
+            cmd1.ry = clamp(cmd1.ry + dy, 1, h1 / 2);
+            cmd2.ry = clamp(cmd2.ry - dy, 1, h1 / 2);
+        } else if prop == 4 {
+            let d = rnd(rng, 1, 4);
+            cmd1.angle = mod_angle(cmd1.angle + d);
+            cmd2.angle = mod_angle(cmd2.angle - d);
+        } else if prop == 5 {
+            let d = rnd(rng, 1, 8);
+            cmd1.color.r = clamp(cmd1.color.r + d, 0, 255) as u8;
+            cmd2.color.r = clamp(cmd2.color.r - d, 0, 255) as u8;
+        } else if prop == 6 {
+            let d = rnd(rng, 1, 8);
+            cmd1.color.g = clamp(cmd1.color.g + d, 0, 255) as u8;
+            cmd2.color.g = clamp(cmd2.color.g - d, 0, 255) as u8;
+        } else if prop == 7 {
+            let d = rnd(rng, 1, 8);
+            cmd1.color.b = clamp(cmd1.color.b + d, 0, 255) as u8;
+            cmd2.color.b = clamp(cmd2.color.b - d, 0, 255) as u8;
+        } else {
+            assert!(false, "prop is out of range");
         }
-        let color = Color {
-            r: r,
-            g: g,
-            b: b,
-            a: a,
-        };
-        let res = DrawCommand {
-            x,
-            y,
-            rx,
-            ry,
-            angle,
-            color,
-        };
-        res
+        (cmd1, cmd2)
     }
 }
 
@@ -176,20 +186,18 @@ fn fill_path(draw_target: &mut DrawTarget, path: &Path, color: Color, is_antiali
 
 fn fill_ellipse(
     draw_target: &mut DrawTarget,
-    cx: f32,
-    cy: f32,
-    rx: f32,
-    ry: f32,
-    angle: f32,
+    cx: u32,
+    cy: u32,
+    rx: u32,
+    ry: u32,
+    angle: i32,
     color: Color,
     is_antialias: bool,
 ) {
     let radius_max = rx.max(ry);
-    if radius_max <= 0.0_f32 {
-        return;
-    }
-
-    let n = 4 + (radius_max.ceil() as usize) / 2;
+    let cxf = cx as f32;
+    let cyf = cy as f32;
+    let n = 4 + (radius_max as usize) / 2;
 
     let mut pb = PathBuilder::new();
     let mut last_x = 0.0_f32;
@@ -197,8 +205,8 @@ fn fill_ellipse(
     for i in 0..n {
         let t = (i as f32) * PI2 / (n as f32);
         let (sin_t, cos_t) = t.sin_cos();
-        let x = cx + rx * cos_t;
-        let y = cy + ry * sin_t;
+        let x = cxf + (rx as f32) * cos_t;
+        let y = cyf + (ry as f32) * sin_t;
         if i == 0 {
             pb.move_to(x, y);
             last_x = x;
@@ -214,9 +222,9 @@ fn fill_ellipse(
     pb.close();
     let path = pb.finish();
 
-    let a = Angle::radians(angle);
-    let t2 = Transform::create_translation(cx, cy);
-    let transform: Transform = Transform::create_translation(-cx, -cy)
+    let a = Angle::radians((angle as f32) * PI / 180.0);
+    let t2 = Transform::create_translation(cxf, cyf);
+    let transform: Transform = Transform::create_translation(-cxf, -cyf)
         .post_rotate(a)
         .post_transform(&t2);
     draw_target.set_transform(&transform);
@@ -382,7 +390,7 @@ fn main() -> Result<(), Box<std::error::Error>> {
         .value_from_str(["--path", "-p"])?
         .unwrap_or("examples/monalisa_s.jpg".to_string());
     let num = args.value_from_str(["--num", "-n"])?.unwrap_or(1000);
-    let alpha = args.value_from_str(["--alpha", "-a"])?.unwrap_or(160);
+    let alpha = args.value_from_str(["--alpha", "-a"])?.unwrap_or(128);
     let brush_scale: f32 = args
         .value_from_str(["--brush-scale", "-b"])?
         .unwrap_or(0.75);
@@ -425,12 +433,30 @@ fn main() -> Result<(), Box<std::error::Error>> {
             }
 
             // optimize
-            for _j in 0..64 {
-                let cmd = DrawCommand::mutate(w, h, &best_cmd, &mut rng);
-                let score = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd);
+            let optimize_count = 64;
+            for _j in 0..optimize_count {
+                let (cmd, cmd2) =
+                    DrawCommand::mutate(w, h, t_ratio, &best_cmd, &mut rng, brush_scale);
+                let score;
+                if cmd == best_cmd {
+                    score = best_score;
+                } else {
+                    score = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd);
+                }
                 if score < best_score {
                     best_score = score;
                     best_cmd = cmd;
+                } else if cmd != cmd2 {
+                    let score2;
+                    if cmd2 == best_cmd {
+                        score2 = best_score;
+                    } else {
+                        score2 = try_draw(&rgb2lab, &draw_target, &mut tmp_target, &lab_img, &cmd2);
+                    }
+                    if score2 < best_score {
+                        best_score = score2;
+                        best_cmd = cmd2;
+                    }
                 }
             }
         }
@@ -459,21 +485,21 @@ fn main() -> Result<(), Box<std::error::Error>> {
 todo
 
 
-angle -> rad to degree
-cmd member user int?  i32?
+parse seed_count optimize_count
 
 check small draw  1x1 2x2 3x2 2x1
 
-profiling
-
+use multi core
 
 paint changed location in alpha white -> score weight
+write svg check size
+parse outputpath
 
 resize in calc, save in original size
-write svg check size
+
 write command
 optimize svg
- quantize color, angle coord
+ quantize color, size
  global optimize
   remove unneeded cmd
   mutate cmd
