@@ -433,22 +433,24 @@ fn vec_from_draw_target(draw_target_mutex: &Mutex<DrawTarget>) -> Vec<u32> {
     draw_target_data
 }
 
-fn main() -> Result<(), Box<std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = pico_args::Arguments::from_env();
     let path = args
-        .value_from_str(["--path", "-p"])?
+        .opt_value_from_str(["--path", "-p"])?
         .unwrap_or("examples/monalisa_s.jpg".to_string());
-    let num = args.value_from_str(["--num", "-n"])?.unwrap_or(1000);
-    let alpha = args.value_from_str(["--alpha", "-a"])?.unwrap_or(128);
-    let brush_scale: f32 = args
-        .value_from_str(["--brush-scale", "-b"])?
+    let num = args.opt_value_from_str(["--num", "-n"])?.unwrap_or(1000);
+    let alpha = args.opt_value_from_str(["--alpha", "-a"])?.unwrap_or(128);
+    let brush_scale = args
+        .opt_value_from_str(["--brush-scale", "-b"])?
         .unwrap_or(0.75);
     let bg_color_string = args
-        .value_from_str(["--bg-color", "-bg"])?
+        .opt_value_from_str(["--bg-color", "-bg"])?
         .unwrap_or("avg".to_string());
-    let seed_count = args.value_from_str(["--seed-count", "-s"])?.unwrap_or(32);
+    let seed_count = args
+        .opt_value_from_str(["--seed-count", "-s"])?
+        .unwrap_or(32);
     let optimize_count = args
-        .value_from_str(["--optimize-count", "-o"])?
+        .opt_value_from_str(["--optimize-count", "-o"])?
         .unwrap_or(64);
 
     let img = image::open(path).unwrap().to_rgba();
