@@ -453,7 +453,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .opt_value_from_str(["--optimize-count", "-o"])?
         .unwrap_or(64);
 
-    let img = image::open(path).unwrap().to_rgba();
+    let img = image::open(path).unwrap().to_rgba8();
     let w = img.width();
     let h = img.height();
     println!("{}x{}", w, h);
