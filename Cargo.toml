@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 euclid = "0.20"
 image = { version = "0.23", default-features = false, features = ["jpeg", "png"] }
-rand = "0.7"
+rand = "0.8"
 raqote = { version = "0.8", default-features = false }
 pico-args = "0.3"
 lab = "0.8"
