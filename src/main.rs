@@ -1,10 +1,13 @@
+use std::fs;
+use std::io::Write;
+use std::sync::Mutex;
+use std::time::Instant;
+
 use lab::Lab;
 
 use tiny_skia::*;
 
 use rayon::prelude::*;
-use std::sync::Mutex;
-use std::time::Instant;
 
 type ColorTable = Vec<Lab>;
 
@@ -140,7 +143,7 @@ fn create_rgb2lab() -> ColorTable {
     result
 }
 
-fn draw_bg(canvas: &mut Canvas, bg_color_string: &str, w: u32, h: u32, img: &[u8]) {
+fn draw_bg(canvas: &mut Canvas, bg_color_string: &str, w: u32, h: u32, img: &[u8]) -> ColorU8 {
     println!("bg_color_string:{:?}", &bg_color_string);
     let bg_color;
     if bg_color_string == "avg" {
@@ -162,6 +165,7 @@ fn draw_bg(canvas: &mut Canvas, bg_color_string: &str, w: u32, h: u32, img: &[u8
     );
     let rect = Rect::from_ltrb(0.0, 0.0, w as f32, h as f32).unwrap();
     canvas.fill_rect(rect, &paint);
+    bg_color
 }
 
 fn canvas_from_vec(w: u32, h: u32, img_data: &mut Vec<u8>) -> Canvas {
@@ -180,6 +184,63 @@ fn vec_from_canvas(canvas_mutex: &Mutex<Canvas>) -> Vec<u8> {
     }
 
     canvas_data
+}
+
+fn get_color_string(color: &ColorU8) -> String {
+    if color.is_opaque() {
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            color.red(),
+            color.green(),
+            color.blue()
+        )
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            color.red(),
+            color.green(),
+            color.blue(),
+            color.alpha()
+        )
+    }
+}
+fn save_svg(w: u32, h: u32, svg_name: &str, commands: &[DrawCommand], bg_color: &ColorU8) {
+    let header = format!(
+        r#"<svg version="1.1" width="{}" height="{}" xmlns="http://www.w3.org/2000/svg">"#,
+        w, h
+    );
+    let footer = "</svg>";
+
+    let mut data = String::from(header);
+    data.push('\n');
+
+    let bg = format!(
+        r#"<rect width="100%" height="100%" fill="{}" />"#,
+        get_color_string(bg_color)
+    );
+    data.push_str(&bg);
+    data.push('\n');
+
+    for i in 0..commands.len() {
+        let command = commands[i];
+        let s = format!(
+            r#"<g transform="translate({},{})"><ellipse rx="{}" ry="{}" fill="{}" transform="rotate({})"/></g>"#,
+            command.x,
+            command.y,
+            command.rx,
+            command.ry,
+            get_color_string(&command.color),
+            command.angle
+        );
+        data.push_str(&s);
+        data.push('\n');
+    }
+
+    data.push_str(footer);
+    data.push('\n');
+
+    let mut f = fs::File::create(svg_name).unwrap();
+    f.write_all(data.as_bytes()).unwrap();
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -217,11 +278,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let canvas = Canvas::from(pixmap.as_mut());
 
     let canvas_mutex = Mutex::new(canvas);
+    let bg_color;
     {
         let mut canvas = canvas_mutex.lock().unwrap();
-        draw_bg(&mut canvas, &bg_color_string, w, h, &img_raw);
+        bg_color = draw_bg(&mut canvas, &bg_color_string, w, h, &img_raw);
         global_best_score = diff(&rgb2lab, &lab_img, &mut canvas);
     }
+
+    let mut commands = Vec::new();
 
     for t in 0..num {
         let t_ratio = (t as f32) / (num as f32);
@@ -305,6 +369,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if best_score < global_best_score {
             println!("   {:?}", &best_cmd);
+            commands.push(best_cmd);
             global_best_score = best_score;
             let mut canvas = canvas_mutex.lock().unwrap();
             //draw best cmd
@@ -316,6 +381,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let img_name = format!("result_{:06}.png", t);
             canvas.pixmap().to_owned().save_png(img_name).unwrap();
         }
+
+        let svg_name = format!("result_{:06}.svg", t);
+        save_svg(w, h, &svg_name, &commands, &bg_color);
     }
 
     {
@@ -331,7 +399,6 @@ todo
 
 
 paint changed location in alpha white -> score weight
-write svg check size
 parse outputpath
 
 resize in calc, save in original size
@@ -341,8 +408,7 @@ ssim image differnce
 
 write command
 optimize svg
- quantize color(websafe), size
- two pass
+ quantize color(web216), size
  global optimize
   remove unneeded cmd
   mutate cmd
