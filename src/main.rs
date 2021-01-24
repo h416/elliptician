@@ -9,41 +9,13 @@ use tiny_skia::*;
 
 use rayon::prelude::*;
 
-type ColorTable = Vec<Lab>;
-
+mod color_converter;
 mod draw_command;
+mod dssim;
 mod renderer;
 
+use crate::color_converter::ColorConverter;
 use crate::draw_command::DrawCommand;
-
-#[inline(always)]
-fn rgb2color(r: u8, g: u8, b: u8) -> u32 {
-    ((r as u32) << 16_u32) + ((g as u32) << 8_u32) + (b as u32)
-}
-
-fn diff(rgb2lab: &ColorTable, lab_img: &[Lab], canvas: &mut Canvas) -> i64 {
-    let pixmap = canvas.pixmap();
-    let w = pixmap.width();
-    let h = pixmap.height();
-    let img2: &[PremultipliedColorU8] = pixmap.pixels_mut();
-    let mut sum = 0;
-    for y in 0..h {
-        for x in 0..w {
-            let index = (x + w * y) as usize;
-            let color2 = img2[index];
-            let lab1 = lab_img[index];
-            assert_eq!(color2.is_opaque(), true);
-            let lab2 = rgb2lab[rgb2color(color2.red(), color2.green(), color2.blue()) as usize];
-
-            let dl = lab1.l - lab2.l;
-            let da = lab1.a - lab2.a;
-            let db = lab1.b - lab2.b;
-            let val = ((dl * dl + da * da + db * db) as f64).sqrt() as i64;
-            sum += val as i64;
-        }
-    }
-    sum
-}
 
 fn avg_color(w: u32, h: u32, img: &[u8]) -> ColorU8 {
     let mut sum_r = 0;
@@ -96,51 +68,17 @@ fn copy_img(src: &mut Canvas, dst: &mut Canvas) {
 }
 
 fn try_draw(
-    rgb2lab: &ColorTable,
+    color_converter: &ColorConverter,
     canvas: &mut Canvas,
     tmp_target: &mut Canvas,
     lab_img: &[Lab],
     cmd: &DrawCommand,
-) -> i64 {
+    mse_ratio: f32,
+) -> f32 {
     copy_img(canvas, tmp_target);
     draw_cmd(tmp_target, &cmd, true);
-    let score = diff(&rgb2lab, &lab_img, tmp_target);
+    let score = dssim::diff(&color_converter, &lab_img, tmp_target, mse_ratio);
     score
-}
-
-fn img2lab(rgb2lab: &ColorTable, w: u32, h: u32, img: &[u8]) -> Vec<Lab> {
-    let mut result = Vec::new();
-
-    for y in 0..h {
-        for x in 0..w {
-            let index2 = (x + w * y) as usize;
-            let index = 4 * index2;
-            let r = img[index];
-            let g = img[index + 1];
-            let b = img[index + 2];
-            let color = rgb2color(r, g, b);
-            let lab = rgb2lab[color as usize];
-            result.push(lab);
-        }
-    }
-
-    result
-}
-
-fn create_rgb2lab() -> ColorTable {
-    let mut result = Vec::new();
-    let lab0 = Lab::from_rgb(&[0, 0, 0]);
-    result.resize(16777216, lab0);
-    for r in 0..=255 {
-        for g in 0..=255 {
-            for b in 0..=255 {
-                let color = rgb2color(r, g, b);
-                let lab = Lab::from_rgb(&[r, g, b]);
-                result[color as usize] = lab;
-            }
-        }
-    }
-    result
 }
 
 fn draw_bg(canvas: &mut Canvas, bg_color_string: &str, w: u32, h: u32, img: &[u8]) -> ColorU8 {
@@ -262,6 +200,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let optimize_count = args
         .opt_value_from_str(["--optimize-count", "-o"])?
         .unwrap_or(64);
+    let mse_ratio = args
+        .opt_value_from_str(["--mse-ratio", "-m"])?
+        .unwrap_or(0.1);
 
     let img = image::open(path).unwrap().to_rgba8();
     let w = img.width();
@@ -269,8 +210,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}x{}", w, h);
     let img_raw = img.into_raw();
 
-    let rgb2lab = create_rgb2lab();
-    let lab_img = img2lab(&rgb2lab, w, h, &img_raw);
+    let color_converter = ColorConverter::new();
+
+    let lab_img = color_converter.lab_image(w, h, &img_raw);
 
     let mut global_best_score;
 
@@ -282,7 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut canvas = canvas_mutex.lock().unwrap();
         bg_color = draw_bg(&mut canvas, &bg_color_string, w, h, &img_raw);
-        global_best_score = diff(&rgb2lab, &lab_img, &mut canvas);
+        global_best_score = dssim::diff(&color_converter, &lab_img, &mut canvas, mse_ratio);
     }
 
     let mut commands = Vec::new();
@@ -291,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t_ratio = (t as f32) / (num as f32);
         let start = Instant::now();
 
-        let results: Vec<(i64, DrawCommand)> = (0..seed_count)
+        let results: Vec<(f32, DrawCommand)> = (0..seed_count)
             .into_par_iter()
             .map(|_| {
                 let mut rng = rand::thread_rng();
@@ -306,11 +248,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut best_cmd =
                     DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha, brush_scale);
                 let mut best_score = try_draw(
-                    &rgb2lab,
+                    &color_converter,
                     &mut src_target,
                     &mut tmp_target,
                     &lab_img,
                     &best_cmd,
+                    mse_ratio,
                 );
 
                 // optimize
@@ -321,8 +264,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if cmd == best_cmd {
                         score = best_score;
                     } else {
-                        score =
-                            try_draw(&rgb2lab, &mut src_target, &mut tmp_target, &lab_img, &cmd);
+                        score = try_draw(
+                            &color_converter,
+                            &mut src_target,
+                            &mut tmp_target,
+                            &lab_img,
+                            &cmd,
+                            mse_ratio,
+                        );
                     }
                     if score < best_score {
                         best_score = score;
@@ -333,11 +282,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             score2 = best_score;
                         } else {
                             score2 = try_draw(
-                                &rgb2lab,
+                                &color_converter,
                                 &mut src_target,
                                 &mut tmp_target,
                                 &lab_img,
                                 &cmd2,
+                                mse_ratio,
                             );
                         }
                         if score2 < best_score {
@@ -351,7 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect();
 
-        let mut best_score = 0;
+        let mut best_score = 0.0_f32;
         let mut best_cmd = DrawCommand::new();
         for i in 0..results.len() {
             let (score, cmd) = results[i as usize];
@@ -402,9 +352,6 @@ paint changed location in alpha white -> score weight
 parse outputpath
 
 resize in calc, save in original size
-
-ssim image differnce
- https://en.wikipedia.org/wiki/Structural_similarity
 
 write command
 optimize svg

@@ -54,8 +54,6 @@ mod tests {
     use super::*;
     #[test]
     fn fill_ellipse_test() {
-        assert_eq!(1, 1);
-
         let mut pixmap = Pixmap::new(16, 16).unwrap();
         let mut canvas = Canvas::from(pixmap.as_mut());
         fill_ellipse(
