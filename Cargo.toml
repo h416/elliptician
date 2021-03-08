@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 image = { version = "0.23", default-features = false, features = ["jpeg", "png"] }
 rand = "0.8"
-tiny-skia = "0.4"
+tiny-skia = "0.5"
 pico-args = "0.4"
 lab = "0.8"
 read_color = "1.0"
