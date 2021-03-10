@@ -45,9 +45,9 @@ fn avg_color(w: u32, h: u32, img: &[u8]) -> ColorU8 {
     ColorU8::from_rgba(r, g, b, 0xff)
 }
 
-fn draw_cmd(canvas: &mut Canvas, cmd: &DrawCommand, is_antialias: bool) {
+fn draw_cmd(pixmap: &mut Pixmap, cmd: &DrawCommand, is_antialias: bool) {
     renderer::fill_ellipse(
-        canvas,
+        pixmap,
         cmd.x as f32,
         cmd.y as f32,
         cmd.rx as f32,
@@ -58,9 +58,9 @@ fn draw_cmd(canvas: &mut Canvas, cmd: &DrawCommand, is_antialias: bool) {
     );
 }
 
-fn copy_img(src: &mut Canvas, dst: &mut Canvas) {
-    let src_data = src.pixmap().data_mut();
-    let dst_data = dst.pixmap().data_mut();
+fn copy_img(src: &mut Pixmap, dst: &mut Pixmap) {
+    let src_data = src.data_mut();
+    let dst_data = dst.data_mut();
     assert_eq!(src_data.len(), dst_data.len());
     for i in 0..src_data.len() {
         dst_data[i] = src_data[i];
@@ -69,19 +69,19 @@ fn copy_img(src: &mut Canvas, dst: &mut Canvas) {
 
 fn try_draw(
     color_converter: &ColorConverter,
-    canvas: &mut Canvas,
-    tmp_target: &mut Canvas,
+    pixmap: &mut Pixmap,
+    tmp_target: &mut Pixmap,
     lab_img: &[Lab],
     cmd: &DrawCommand,
     mse_ratio: f32,
 ) -> f32 {
-    copy_img(canvas, tmp_target);
+    copy_img(pixmap, tmp_target);
     draw_cmd(tmp_target, &cmd, true);
     let score = dssim::diff(&color_converter, &lab_img, tmp_target, mse_ratio);
     score
 }
 
-fn draw_bg(canvas: &mut Canvas, bg_color_string: &str, w: u32, h: u32, img: &[u8]) -> ColorU8 {
+fn draw_bg(pixmap: &mut Pixmap, bg_color_string: &str, w: u32, h: u32, img: &[u8]) -> ColorU8 {
     println!("bg_color_string:{:?}", &bg_color_string);
     let bg_color;
     if bg_color_string == "avg" {
@@ -91,7 +91,6 @@ fn draw_bg(canvas: &mut Canvas, bg_color_string: &str, w: u32, h: u32, img: &[u8
         bg_color = ColorU8::from_rgba(rgb[0], rgb[1], rgb[2], 0xff);
     }
     println!("bg_color:{:?}", &bg_color);
-    let pixmap = canvas.pixmap();
     let w = pixmap.width();
     let h = pixmap.height();
     let mut paint = Paint::default();
@@ -102,26 +101,35 @@ fn draw_bg(canvas: &mut Canvas, bg_color_string: &str, w: u32, h: u32, img: &[u8
         bg_color.alpha(),
     );
     let rect = Rect::from_ltrb(0.0, 0.0, w as f32, h as f32).unwrap();
-    canvas.fill_rect(rect, &paint);
+    pixmap.fill_rect(rect, &paint, Transform::identity(), None);
     bg_color
 }
 
-fn canvas_from_vec(w: u32, h: u32, img_data: &mut Vec<u8>) -> Canvas {
-    let pixmap = PixmapMut::from_bytes(img_data, w, h).unwrap();
-    Canvas::from(pixmap)
-}
+fn pixmap_from_vec(w: u32, h: u32, img_data: &mut Vec<u8>) -> Pixmap {
+    //Pixmap::from_vec(img_data, IntSize::from_wh(w, h)).unwrap()
+    let mut pixmap = Pixmap::new(w, h).unwrap();
 
-fn vec_from_canvas(canvas_mutex: &Mutex<Canvas>) -> Vec<u8> {
-    let mut canvas = canvas_mutex.lock().unwrap();
-    let mut canvas_data: Vec<u8> = Vec::new();
+    let data = pixmap.data_mut();
 
-    let data = canvas.pixmap().data_mut();
+    assert_eq!(data.len(), img_data.len());
 
     for i in 0..data.len() {
-        canvas_data.push(data[i]);
+        data[i] = img_data[i];
+    }
+    pixmap
+}
+
+fn vec_from_pixmap(pixmap_mutex: &Mutex<Pixmap>) -> Vec<u8> {
+    let mut pixmap = pixmap_mutex.lock().unwrap();
+    let mut pixmap_data: Vec<u8> = Vec::new();
+
+    let data = pixmap.data_mut();
+
+    for i in 0..data.len() {
+        pixmap_data.push(data[i]);
     }
 
-    canvas_data
+    pixmap_data
 }
 
 fn get_color_string(color: &ColorU8) -> String {
@@ -216,15 +224,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut global_best_score;
 
-    let mut pixmap = Pixmap::new(w, h).unwrap();
-    let canvas = Canvas::from(pixmap.as_mut());
+    let pixmap = Pixmap::new(w, h).unwrap();
 
-    let canvas_mutex = Mutex::new(canvas);
+    let pixmap_mutex = Mutex::new(pixmap);
     let bg_color;
     {
-        let mut canvas = canvas_mutex.lock().unwrap();
-        bg_color = draw_bg(&mut canvas, &bg_color_string, w, h, &img_raw);
-        global_best_score = dssim::diff(&color_converter, &lab_img, &mut canvas, mse_ratio);
+        let mut pixmap = pixmap_mutex.lock().unwrap();
+        bg_color = draw_bg(&mut pixmap, &bg_color_string, w, h, &img_raw);
+        global_best_score = dssim::diff(&color_converter, &lab_img, &mut pixmap, mse_ratio);
     }
 
     let mut commands = Vec::new();
@@ -239,18 +246,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut rng = rand::thread_rng();
 
                 let mut tmp_pixmap = Pixmap::new(w, h).unwrap();
-                let mut tmp_target = Canvas::from(tmp_pixmap.as_mut());
 
-                let mut canvas_data = vec_from_canvas(&canvas_mutex);
+                let mut pixmap_data = vec_from_pixmap(&pixmap_mutex);
 
-                let mut src_target = canvas_from_vec(w, h, &mut canvas_data);
+                let mut src_target = pixmap_from_vec(w, h, &mut pixmap_data);
 
                 let mut best_cmd =
                     DrawCommand::rand(w, h, t_ratio, &img_raw, &mut rng, alpha, brush_scale);
                 let mut best_score = try_draw(
                     &color_converter,
                     &mut src_target,
-                    &mut tmp_target,
+                    &mut tmp_pixmap,
                     &lab_img,
                     &best_cmd,
                     mse_ratio,
@@ -267,7 +273,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         score = try_draw(
                             &color_converter,
                             &mut src_target,
-                            &mut tmp_target,
+                            &mut tmp_pixmap,
                             &lab_img,
                             &cmd,
                             mse_ratio,
@@ -284,7 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             score2 = try_draw(
                                 &color_converter,
                                 &mut src_target,
-                                &mut tmp_target,
+                                &mut tmp_pixmap,
                                 &lab_img,
                                 &cmd2,
                                 mse_ratio,
@@ -321,15 +327,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   {:?}", &best_cmd);
             commands.push(best_cmd);
             global_best_score = best_score;
-            let mut canvas = canvas_mutex.lock().unwrap();
+            let mut pixmap = pixmap_mutex.lock().unwrap();
             //draw best cmd
-            draw_cmd(&mut canvas, &best_cmd, true);
+            draw_cmd(&mut pixmap, &best_cmd, true);
         }
 
         {
-            let mut canvas = canvas_mutex.lock().unwrap();
+            let pixmap = pixmap_mutex.lock().unwrap();
             let img_name = format!("result_{:06}.png", t);
-            canvas.pixmap().to_owned().save_png(img_name).unwrap();
+            pixmap.save_png(img_name).unwrap();
         }
 
         let svg_name = format!("result_{:06}.svg", t);
@@ -337,8 +343,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     {
-        let mut canvas = canvas_mutex.lock().unwrap();
-        canvas.pixmap().to_owned().save_png("out.png").unwrap();
+        let pixmap = pixmap_mutex.lock().unwrap();
+        pixmap.save_png("out.png").unwrap();
     }
 
     Ok(())

@@ -7,10 +7,9 @@ use crate::ColorConverter;
 pub fn diff(
     color_converter: &ColorConverter,
     lab_img: &[Lab],
-    canvas: &mut Canvas,
+    pixmap: &mut Pixmap,
     mse_ratio: f32,
 ) -> f32 {
-    let pixmap = canvas.pixmap();
     let w = pixmap.width();
     let h = pixmap.height();
     let img2: &[PremultipliedColorU8] = pixmap.pixels_mut();
@@ -161,14 +160,12 @@ mod tests {
         let mut pixmap = Pixmap::new(WIDTH, HEIGHT).unwrap();
         pixmap.fill(Color::from_rgba8(0, 0, 0, 255));
 
-        let mut canvas = Canvas::from(pixmap.as_mut());
-
         let img_raw = vec![0_u8; (WIDTH * HEIGHT * 4) as usize];
 
         let color_converter = ColorConverter::new();
         let lab_img = color_converter.lab_image(WIDTH, HEIGHT, &img_raw);
 
-        let res = diff(&color_converter, &lab_img, &mut canvas, 0.1);
+        let res = diff(&color_converter, &lab_img, &mut pixmap, 0.1);
 
         assert_eq!(res, 0.0_f32);
     }

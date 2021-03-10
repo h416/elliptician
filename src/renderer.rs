@@ -3,7 +3,7 @@ use tiny_skia::*;
 const PI: f32 = std::f32::consts::PI;
 
 pub fn fill_ellipse(
-    canvas: &mut Canvas,
+    pixmap: &mut Pixmap,
     cx: f32,
     cy: f32,
     rx: f32,
@@ -31,22 +31,23 @@ pub fn fill_ellipse(
     let sc = angle_radian.sin_cos();
     let sin = sc.0;
     let cos = sc.1;
-    let rotate = Transform::from_row(cos, sin, -sin, cos, 0.0, 0.0).unwrap();
+    let rotate = Transform::from_row(cos, sin, -sin, cos, 0.0, 0.0);
 
-    let scale = Transform::from_scale(sx, sy).unwrap();
-    let t = Transform::from_translate(cx, cy).unwrap();
-    let mut transform = scale.post_concat(&rotate).unwrap();
-    transform = transform.post_concat(&t).unwrap();
+    let scale = Transform::from_scale(sx, sy);
+    let t = Transform::from_translate(cx, cy);
+    let mut transform = scale.post_concat(rotate);
+    transform = transform.post_concat(t);
 
-    canvas.set_transform(transform);
+    //canvas.set_transform(transform);
 
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.red(), color.green(), color.blue(), color.alpha());
     paint.anti_alias = is_antialias;
 
-    canvas.fill_path(&path, &paint, FillRule::Winding);
+    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    //canvas.fill_path(&path, &paint, FillRule::Winding);
 
-    canvas.reset_transform();
+    //canvas.reset_transform();
 }
 
 #[cfg(test)]
@@ -55,9 +56,8 @@ mod tests {
     #[test]
     fn fill_ellipse_test() {
         let mut pixmap = Pixmap::new(16, 16).unwrap();
-        let mut canvas = Canvas::from(pixmap.as_mut());
         fill_ellipse(
-            &mut canvas,
+            &mut pixmap,
             8.0,
             8.0,
             8.0,
